@@ -18,7 +18,7 @@ defmodule ReqLLM.Providers.Google do
   - `cached_content` - Reference to cached content for 90% cost savings (see Context Caching below)
   - `dimensions` - Number of dimensions for embedding vectors
   - `task_type` - Task type for embeddings (e.g., RETRIEVAL_QUERY)
-  - `response_modalities` - Control output modalities for image generation (e.g., ["Image"] for image-only)
+  - `response_modalities` - Control output modalities for image generation (e.g., ["IMAGE"] for image-only)
 
   See `provider_schema/0` for the complete Google-specific schema and
   `ReqLLM.Provider.Options` for inherited OpenAI parameters.
@@ -133,9 +133,9 @@ defmodule ReqLLM.Providers.Google do
         "Use x-goog-api-key header for authentication instead of URL query parameter. Required for OpenAI-compatible API proxies."
     ],
     response_modalities: [
-      type: {:list, :string},
+      type: {:list, {:in, ["TEXT", "IMAGE"]}},
       doc:
-        "Control output modalities for image generation. List of \"Text\" and/or \"Image\". Default is [\"Text\", \"Image\"]. Use [\"Image\"] for image-only responses."
+        "Control output modalities for image generation. List of \"TEXT\" and/or \"IMAGE\". Default is [\"TEXT\", \"IMAGE\"]. Use [\"IMAGE\"] for image-only responses."
     ]
   ]
 
@@ -679,6 +679,7 @@ defmodule ReqLLM.Providers.Google do
     {provider_opts, rest} = Keyword.pop(opts, :provider_options, [])
 
     {effort, provider_opts} = Keyword.pop(provider_opts, :reasoning_effort)
+    provider_opts = normalize_response_modalities(provider_opts)
 
     provider_opts =
       case effort do
@@ -702,6 +703,31 @@ defmodule ReqLLM.Providers.Google do
 
     {Keyword.put(rest, :provider_options, provider_opts), []}
   end
+
+  defp normalize_response_modalities(provider_opts) do
+    case Keyword.fetch(provider_opts, :response_modalities) do
+      {:ok, modalities} when is_list(modalities) ->
+        normalized = Enum.map(modalities, &normalize_response_modality/1)
+        Keyword.put(provider_opts, :response_modalities, normalized)
+
+      _ ->
+        provider_opts
+    end
+  end
+
+  defp normalize_response_modality(modality) when is_atom(modality) do
+    modality
+    |> Atom.to_string()
+    |> normalize_response_modality()
+  end
+
+  defp normalize_response_modality(modality) when is_binary(modality) do
+    modality
+    |> String.trim()
+    |> String.upcase()
+  end
+
+  defp normalize_response_modality(modality), do: modality
 
   defp translate_reasoning_effort_to_budget(:none, _model), do: 0
   defp translate_reasoning_effort_to_budget(:minimal, _model), do: 2_048
