@@ -393,6 +393,63 @@ Google recommends describing scenes rather than listing keywords:
 
 ---
 
+## Azure
+
+Azure OpenAI Service hosts `gpt-image-*` deployments. Both text-to-image and
+image-to-image are supported via `ReqLLM.generate_image/3` — the input context
+selects the endpoint.
+
+### Supported Models
+
+| Deployment model | Notes |
+|------------------|-------|
+| `gpt-image-1.5`  | State-of-the-art; supports generations and edits |
+| `gpt-image-1`    | Generations and edits |
+| `gpt-image-1-mini` | Generations |
+
+### Constraint
+
+Only the traditional Azure OpenAI Service base URL
+(`https://<resource>.openai.azure.com/openai`) is supported for image
+operations. Azure AI Foundry and the `/openai/v1` GA path return an error.
+
+### Text-to-image
+
+```elixir
+{:ok, response} =
+  ReqLLM.generate_image(
+    "azure:gpt-image-1.5",
+    "A photograph of a red fox in an autumn forest",
+    base_url: "https://<resource>.openai.azure.com/openai",
+    deployment: "gpt-image-1.5",
+    size: "1024x1024",
+    quality: :medium
+  )
+```
+
+### Image-to-image (edits)
+
+```elixir
+context =
+  ReqLLM.Context.new([
+    ReqLLM.Context.user([
+      ReqLLM.Message.ContentPart.text("Make this black and white"),
+      ReqLLM.Message.ContentPart.image(File.read!("input.png"), "image/png")
+    ])
+  ])
+
+{:ok, response} =
+  ReqLLM.generate_image(
+    "azure:gpt-image-1.5",
+    context,
+    base_url: "https://<resource>.openai.azure.com/openai",
+    deployment: "gpt-image-1.5",
+    provider_options: [mask: File.read!("mask.png")]
+  )
+```
+
+---
+
 ## Usage & Cost Tracking
 
 Image generation responses include detailed usage and cost information:
