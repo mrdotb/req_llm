@@ -2111,6 +2111,50 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure image op classification" do
+    alias ReqLLM.Message.ContentPart
+
+    test "text-only context routes to generate path" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "a red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/generations"
+    end
+
+    test "context with an image ContentPart routes to edit path" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ContentPart.text("Make it black and white"),
+            ContentPart.image("IMG-BYTES", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/edits"
+    end
+  end
+
   defp traditional_openai_model do
     %LLMDB.Model{
       id: "gpt-4o",

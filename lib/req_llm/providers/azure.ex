@@ -380,7 +380,9 @@ defmodule ReqLLM.Providers.Azure do
     with {:ok, model} <- ReqLLM.model(model_spec),
          model_id = effective_model_id(model),
          :ok <- validate_image_model(model_id),
-         {:ok, context, prompt, _image_parts} <- image_context(prompt_or_messages, opts) do
+         {:ok, context, prompt, image_parts} <- image_context(prompt_or_messages, opts) do
+      sub_op = if image_parts == [], do: :generate, else: :edit
+
       model_family = get_model_family(model_id)
       resolved_base_url = resolve_base_url(model_family, opts)
 
@@ -423,42 +425,71 @@ defmodule ReqLLM.Providers.Azure do
       {api_version, deployment, base_url} =
         extract_azure_credentials(model, processed_opts)
 
-      formatter = __MODULE__.Images
-
-      body = formatter.format_generate_request(model_id, prompt, processed_opts)
-      path = "/deployments/#{deployment}/images/generations?api-version=#{api_version}"
-
-      http_opts = Keyword.get(opts, :req_http_options, [])
-
-      req_keys =
-        supported_provider_options() ++
-          @common_req_keys ++
-          [:size, :quality, :output_format, :user, :n]
-
-      request =
-        Req.new(
-          [
-            url: path,
-            method: :post,
-            json: body,
-            receive_timeout: Keyword.get(processed_opts, :receive_timeout, 120_000)
-          ] ++ http_opts
-        )
-        |> Req.Request.register_options(req_keys)
-        |> Req.Request.merge_options(
-          Keyword.take(processed_opts, req_keys) ++
-            [operation: :image, model: model.id, base_url: base_url]
-        )
-        |> Req.Request.put_private(:model, model)
-        |> Req.Request.put_private(:formatter, formatter)
-        |> attach(model, processed_opts)
-
-      {:ok, request}
+      build_image_request(
+        sub_op,
+        model,
+        prompt,
+        image_parts,
+        processed_opts,
+        deployment,
+        api_version,
+        base_url,
+        opts
+      )
     end
   end
 
   def prepare_request(operation, model_spec, input, opts) do
     ReqLLM.Provider.Defaults.prepare_request(__MODULE__, operation, model_spec, input, opts)
+  end
+
+  defp build_image_request(:generate, model, prompt, _image_parts, processed_opts, deployment, api_version, base_url, opts) do
+    formatter = __MODULE__.Images
+    model_id = effective_model_id(model)
+    body = formatter.format_generate_request(model_id, prompt, processed_opts)
+    path = "/deployments/#{deployment}/images/generations?api-version=#{api_version}"
+
+    http_opts = Keyword.get(opts, :req_http_options, [])
+
+    req_keys =
+      supported_provider_options() ++
+        @common_req_keys ++
+        [:size, :quality, :output_format, :user, :n]
+
+    request =
+      Req.new(
+        [
+          url: path,
+          method: :post,
+          json: body,
+          receive_timeout: Keyword.get(processed_opts, :receive_timeout, 120_000)
+        ] ++ http_opts
+      )
+      |> Req.Request.register_options(req_keys)
+      |> Req.Request.merge_options(
+        Keyword.take(processed_opts, req_keys) ++
+          [operation: :image, model: model.id, base_url: base_url]
+      )
+      |> Req.Request.put_private(:model, model)
+      |> Req.Request.put_private(:formatter, formatter)
+      |> attach(model, processed_opts)
+
+    {:ok, request}
+  end
+
+  defp build_image_request(:edit, model, _prompt, _image_parts, _processed_opts, deployment, api_version, base_url, _opts) do
+    # Placeholder — Task 6 and Task 8 will flesh this out with multipart body.
+    # For now just route to /edits so the Task 5 classification test passes.
+    path = "/deployments/#{deployment}/images/edits?api-version=#{api_version}"
+
+    request =
+      Req.new(url: path, method: :post, base_url: base_url)
+      |> Req.Request.register_options([:model, :base_url, :operation])
+      |> Req.Request.merge_options(model: model.id, base_url: base_url, operation: :image)
+      |> Req.Request.put_private(:model, model)
+      |> Req.Request.put_private(:formatter, __MODULE__.Images)
+
+    {:ok, request}
   end
 
   defp do_prepare_chat_request(model_spec, prompt, opts) do
