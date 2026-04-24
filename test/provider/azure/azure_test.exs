@@ -1846,6 +1846,56 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.Images.format_generate_request/3" do
+    alias ReqLLM.Providers.Azure.Images
+
+    test "emits minimum required fields" do
+      body = Images.format_generate_request("gpt-image-1.5", "hello", [])
+      assert body == %{"prompt" => "hello", "n" => 1}
+    end
+
+    test "passes through size, quality, output_format and user" do
+      body =
+        Images.format_generate_request(
+          "gpt-image-1.5",
+          "hello",
+          size: "1024x1024",
+          quality: :medium,
+          output_format: :png,
+          user: "u1"
+        )
+
+      assert body["size"] == "1024x1024"
+      assert body["quality"] == "medium"
+      assert body["output_format"] == "png"
+      assert body["user"] == "u1"
+    end
+
+    test "passes provider_options for output_compression / background / moderation" do
+      body =
+        Images.format_generate_request(
+          "gpt-image-1.5",
+          "hello",
+          provider_options: [output_compression: 80, background: "transparent", moderation: "low"]
+        )
+
+      assert body["output_compression"] == 80
+      assert body["background"] == "transparent"
+      assert body["moderation"] == "low"
+    end
+
+    test "accepts a size tuple" do
+      body = Images.format_generate_request("gpt-image-1.5", "hi", size: {1536, 1024})
+      assert body["size"] == "1536x1024"
+    end
+
+    test "omits keys whose values are nil" do
+      body = Images.format_generate_request("gpt-image-1.5", "hi", size: nil, quality: nil)
+      refute Map.has_key?(body, "size")
+      refute Map.has_key?(body, "quality")
+    end
+  end
+
   describe "prepare_request/4 :image (family routing)" do
     test "gpt-image model routes to Azure.Images formatter" do
       model = gpt_image_model()
