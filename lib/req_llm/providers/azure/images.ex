@@ -11,10 +11,10 @@ defmodule ReqLLM.Providers.Azure.Images do
   """
 
   # Future aliases — uncomment as formatter bodies are filled in across Tasks 2–9:
-  # alias ReqLLM.Context
-  # alias ReqLLM.Message
-  # alias ReqLLM.Message.ContentPart
-  # alias ReqLLM.Response
+  alias ReqLLM.Context
+  alias ReqLLM.Message
+  alias ReqLLM.Message.ContentPart
+  alias ReqLLM.Response
 
   @doc "Build the JSON body for /images/generations."
   def format_generate_request(_model_id, prompt, opts) when is_binary(prompt) do
@@ -68,10 +68,64 @@ defmodule ReqLLM.Providers.Azure.Images do
   end
 
   @doc "Parse an image response body into a ReqLLM.Response."
-  def parse_response(_body, _model, _opts), do: {:error, :not_implemented}
+  def parse_response(body, model, opts) when is_map(body) do
+    data = Map.get(body, "data", [])
+    media_type = media_type_for(Keyword.get(opts, :output_format))
 
-  @doc "Map an :output_format option to the corresponding MIME type. Overridden in Task 3."
-  def media_type_for(_format), do: "image/png"
+    parts =
+      data
+      |> Enum.map(&decode_item(&1, media_type))
+      |> Enum.reject(&is_nil/1)
+
+    context = Keyword.get(opts, :context) || %Context{messages: []}
+
+    response = %Response{
+      id: image_response_id(),
+      model: model.id,
+      context: context,
+      message: %Message{role: :assistant, content: parts},
+      object: nil,
+      stream?: false,
+      stream: nil,
+      usage: nil,
+      finish_reason: :stop,
+      provider_meta: %{"azure" => Map.delete(body, "data")},
+      error: nil
+    }
+
+    {:ok, Context.merge_response(context, response)}
+  end
+
+  @doc "Map an :output_format option to the corresponding MIME type."
+  def media_type_for(:jpeg), do: "image/jpeg"
+  def media_type_for("jpeg"), do: "image/jpeg"
+  def media_type_for(:webp), do: "image/webp"
+  def media_type_for("webp"), do: "image/webp"
+  def media_type_for(_), do: "image/png"
+
+  defp decode_item(%{"b64_json" => b64} = item, media_type) when is_binary(b64) do
+    revised = Map.get(item, "revised_prompt")
+    metadata = if is_binary(revised), do: %{revised_prompt: revised}, else: %{}
+
+    %ContentPart{
+      type: :image,
+      data: Base.decode64!(b64),
+      media_type: media_type,
+      metadata: metadata
+    }
+  end
+
+  defp decode_item(%{"url" => url} = item, _media_type) when is_binary(url) do
+    revised = Map.get(item, "revised_prompt")
+    metadata = if is_binary(revised), do: %{revised_prompt: revised}, else: %{}
+    %ContentPart{type: :image_url, url: url, metadata: metadata}
+  end
+
+  defp decode_item(_, _), do: nil
+
+  defp image_response_id do
+    "img_" <> (:crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false))
+  end
 
   @doc "Validate a list of image ContentParts for use in a multipart edit. Overridden in Task 6."
   def validate_image_parts!(parts), do: parts

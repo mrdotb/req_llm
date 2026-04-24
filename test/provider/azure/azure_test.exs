@@ -1896,6 +1896,52 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.Images.parse_response/3" do
+    alias ReqLLM.Message.ContentPart
+    alias ReqLLM.Providers.Azure.Images
+
+    test "decodes b64_json entries into :image ContentParts" do
+      body = %{
+        "created" => 1_700_000_000,
+        "data" => [
+          %{"b64_json" => Base.encode64("PNG-BYTES-1")},
+          %{"b64_json" => Base.encode64("PNG-BYTES-2")}
+        ]
+      }
+
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      assert [
+               %ContentPart{type: :image, data: "PNG-BYTES-1", media_type: "image/png"},
+               %ContentPart{type: :image, data: "PNG-BYTES-2", media_type: "image/png"}
+             ] = resp.message.content
+
+      assert resp.model == "gpt-image-1.5"
+      assert resp.finish_reason == :stop
+    end
+
+    test "honors output_format opt for media_type" do
+      body = %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, output_format: :webp)
+
+      assert [%ContentPart{media_type: "image/webp"}] = resp.message.content
+    end
+
+    test "handles url entries (no b64_json)" do
+      body = %{"data" => [%{"url" => "https://example.com/out.png"}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      assert [%ContentPart{type: :image_url, url: "https://example.com/out.png"}] =
+               resp.message.content
+    end
+  end
+
   describe "prepare_request/4 :image (family routing)" do
     test "gpt-image model routes to Azure.Images formatter" do
       model = gpt_image_model()
