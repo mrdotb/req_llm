@@ -28,4 +28,10 @@ defmodule ReqLLM.Providers.Azure.Images do
 
   @doc "Parse an image response body into a ReqLLM.Response."
   def parse_response(_body, _model, _opts), do: {:error, :not_implemented}
+
+  @doc "Map an :output_format option to the corresponding MIME type. Overridden in Task 3."
+  def media_type_for(_format), do: "image/png"
+
+  @doc "Validate a list of image ContentParts for use in a multipart edit. Overridden in Task 6."
+  def validate_image_parts!(parts), do: parts
 end

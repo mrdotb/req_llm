@@ -405,18 +405,7 @@ defmodule ReqLLM.Providers.Azure do
       req_keys =
         supported_provider_options() ++
           @common_req_keys ++
-          [
-            :n,
-            :size,
-            :aspect_ratio,
-            :output_format,
-            :response_format,
-            :quality,
-            :style,
-            :seed,
-            :negative_prompt,
-            :user
-          ]
+          [:size, :quality, :output_format, :user, :n]
 
       request =
         Req.new(
