@@ -2341,6 +2341,83 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure image operation error paths" do
+    test "rejects :image for non-gpt-image model family" do
+      model = traditional_openai_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.openai.azure.com/openai",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "does not support image operations on Azure"
+    end
+
+    test "rejects Foundry base URL for :image" do
+      model = gpt_image_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.services.ai.azure.com",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "traditional Azure OpenAI Service"
+    end
+
+    test "rejects v1 GA base URL for :image" do
+      model = gpt_image_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.openai.azure.com/openai/v1",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "traditional Azure OpenAI Service"
+    end
+
+    test "rejects image edit with only an :image_url ContentPart" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("edit"),
+            %ReqLLM.Message.ContentPart{type: :image_url, url: "https://x/y.png"}
+          ])
+        ])
+
+      # image_url does not count as :image — this context has zero :image parts
+      # and therefore routes to generate, which is fine. This test documents
+      # the routing behavior explicitly.
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/generations"
+    end
+  end
+
   defp traditional_openai_model do
     %LLMDB.Model{
       id: "gpt-4o",

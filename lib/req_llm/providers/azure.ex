@@ -380,11 +380,11 @@ defmodule ReqLLM.Providers.Azure do
     with {:ok, model} <- ReqLLM.model(model_spec),
          model_id = effective_model_id(model),
          :ok <- validate_image_model(model_id),
-         {:ok, context, prompt, image_parts} <- image_context(prompt_or_messages, opts) do
+         {:ok, context, prompt, image_parts} <- image_context(prompt_or_messages, opts),
+         model_family = get_model_family(model_id),
+         resolved_base_url = resolve_base_url(model_family, opts),
+         :ok <- reject_unsupported_endpoint_format(resolved_base_url) do
       sub_op = if image_parts == [], do: :generate, else: :edit
-
-      model_family = get_model_family(model_id)
-      resolved_base_url = resolve_base_url(model_family, opts)
 
       # Strip unknown provider_options keys before validation so that image-specific
       # keys (e.g. output_compression) don't cause NimbleOptions to reject the call.
@@ -1490,6 +1490,29 @@ defmodule ReqLLM.Providers.Azure do
          )}
     end
   end
+
+  defp reject_unsupported_endpoint_format(base_url) when is_binary(base_url) do
+    cond do
+      uses_foundry_format?(base_url) ->
+        {:error,
+         ReqLLM.Error.Invalid.Parameter.exception(
+           parameter:
+             "Image operations require the traditional Azure OpenAI Service base URL (https://<resource>.openai.azure.com/openai). Azure AI Foundry image endpoints are not supported."
+         )}
+
+      uses_v1_ga_format?(base_url) ->
+        {:error,
+         ReqLLM.Error.Invalid.Parameter.exception(
+           parameter:
+             "Image operations require the traditional Azure OpenAI Service base URL (https://<resource>.openai.azure.com/openai). The v1 GA path (/openai/v1) is not supported for images."
+         )}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp reject_unsupported_endpoint_format(_), do: :ok
 
   defp image_context(prompt_or_messages, opts) do
     context_result =
