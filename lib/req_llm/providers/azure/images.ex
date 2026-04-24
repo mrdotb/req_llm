@@ -63,8 +63,25 @@ defmodule ReqLLM.Providers.Azure.Images do
   defp maybe_put_integer(body, _key, _value), do: body
 
   @doc "Build the multipart parts list for /images/edits."
-  def format_edit_request(_model_id, prompt, image_parts, _opts) do
-    {prompt, image_parts}
+  def format_edit_request(_model_id, prompt, image_parts, opts) when is_binary(prompt) do
+    :ok = validate_image_parts!(image_parts)
+
+    provider_opts = normalize_provider_opts(opts)
+
+    image_fields =
+      Enum.map(image_parts, fn %ContentPart{data: bytes, media_type: mt} ->
+        mt = mt || "image/png"
+        {:image, {bytes, filename: "image.#{ext_for(mt)}", content_type: mt}}
+      end)
+
+    mask_field = build_mask_field(Keyword.get(provider_opts, :mask))
+
+    image_fields ++
+      mask_field ++
+      [{:prompt, prompt}] ++
+      maybe_multipart(:n, Keyword.get(opts, :n)) ++
+      maybe_multipart(:size, Keyword.get(opts, :size)) ++
+      maybe_multipart(:quality, Keyword.get(opts, :quality))
   end
 
   @doc "Parse an image response body into a ReqLLM.Response."
@@ -170,5 +187,60 @@ defmodule ReqLLM.Providers.Azure.Images do
   defp normalize_image_quality(_), do: "medium"
 
   @doc false
-  def validate_image_parts!(parts), do: parts
+  def validate_image_parts!([]) do
+    raise ReqLLM.Error.Invalid.Parameter.exception(
+            parameter:
+              "image edit requires at least one %ContentPart{type: :image} in the last user message"
+          )
+  end
+
+  def validate_image_parts!(parts) when is_list(parts) do
+    Enum.each(parts, fn
+      %ContentPart{type: :image, data: data} when is_binary(data) ->
+        :ok
+
+      %ContentPart{type: type} ->
+        raise ReqLLM.Error.Invalid.Parameter.exception(
+                parameter:
+                  "Azure image edit requires binary image data. Got ContentPart of type #{inspect(type)}; use ContentPart.image/2 with binary bytes."
+              )
+    end)
+
+    :ok
+  end
+
+  defp build_mask_field(nil), do: []
+
+  defp build_mask_field(bytes) when is_binary(bytes),
+    do: [{:mask, {bytes, filename: "mask.png", content_type: "image/png"}}]
+
+  defp build_mask_field(%ContentPart{type: :image, data: bytes, media_type: mt}) do
+    mt = mt || "image/png"
+    [{:mask, {bytes, filename: "mask.#{ext_for(mt)}", content_type: mt}}]
+  end
+
+  defp build_mask_field(other) do
+    raise ReqLLM.Error.Invalid.Parameter.exception(
+            parameter:
+              "provider_options[:mask] must be binary bytes or a %ContentPart{type: :image}; got: #{inspect(other)}"
+          )
+  end
+
+  defp ext_for("image/png"), do: "png"
+  defp ext_for("image/jpeg"), do: "jpg"
+  defp ext_for("image/webp"), do: "webp"
+  defp ext_for(_), do: "png"
+
+  defp maybe_multipart(_key, nil), do: []
+
+  defp maybe_multipart(key, value) when is_atom(value),
+    do: [{key, Atom.to_string(value)}]
+
+  defp maybe_multipart(key, value) when is_integer(value),
+    do: [{key, Integer.to_string(value)}]
+
+  defp maybe_multipart(key, {w, h}) when is_integer(w) and is_integer(h),
+    do: [{key, "#{w}x#{h}"}]
+
+  defp maybe_multipart(key, value) when is_binary(value), do: [{key, value}]
 end

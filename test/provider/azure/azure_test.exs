@@ -1968,6 +1968,111 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.Images.format_edit_request/4" do
+    alias ReqLLM.Message.ContentPart
+    alias ReqLLM.Providers.Azure.Images
+
+    test "emits image + prompt parts with correct content types" do
+      parts = [ContentPart.image("IMG-BYTES", "image/png")]
+
+      form = Images.format_edit_request("gpt-image-1.5", "make it b/w", parts, [])
+
+      image_entry = Enum.find(form, fn {k, _} -> k == :image end)
+      {:image, {bytes, meta}} = image_entry
+      assert bytes == "IMG-BYTES"
+      assert Keyword.fetch!(meta, :content_type) == "image/png"
+      assert Keyword.fetch!(meta, :filename) == "image.png"
+
+      assert {:prompt, "make it b/w"} in form
+    end
+
+    test "emits multiple image parts in order" do
+      parts = [
+        ContentPart.image("A", "image/png"),
+        ContentPart.image("B", "image/jpeg")
+      ]
+
+      form = Images.format_edit_request("gpt-image-1.5", "compose", parts, [])
+      images = for {:image, entry} <- form, do: entry
+
+      assert length(images) == 2
+      {bytes1, meta1} = Enum.at(images, 0)
+      {bytes2, meta2} = Enum.at(images, 1)
+      assert bytes1 == "A"
+      assert bytes2 == "B"
+      assert Keyword.fetch!(meta1, :content_type) == "image/png"
+      assert Keyword.fetch!(meta2, :content_type) == "image/jpeg"
+      assert Keyword.fetch!(meta2, :filename) == "image.jpg"
+    end
+
+    test "inserts mask when provided as binary (defaults to png)" do
+      parts = [ContentPart.image("IMG", "image/png")]
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          provider_options: [mask: "MASK-BYTES"]
+        )
+
+      {:mask, {bytes, meta}} = Enum.find(form, &match?({:mask, _}, &1))
+      assert bytes == "MASK-BYTES"
+      assert Keyword.fetch!(meta, :content_type) == "image/png"
+      assert Keyword.fetch!(meta, :filename) == "mask.png"
+    end
+
+    test "inserts mask when provided as %ContentPart{type: :image}" do
+      parts = [ContentPart.image("IMG", "image/png")]
+      mask_cp = ContentPart.image("MASK", "image/webp")
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          provider_options: [mask: mask_cp]
+        )
+
+      {:mask, {bytes, meta}} = Enum.find(form, &match?({:mask, _}, &1))
+      assert bytes == "MASK"
+      assert Keyword.fetch!(meta, :content_type) == "image/webp"
+      assert Keyword.fetch!(meta, :filename) == "mask.webp"
+    end
+
+    test "passes scalar opts as string multipart entries" do
+      parts = [ContentPart.image("IMG", "image/png")]
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          n: 2,
+          size: "1024x1024",
+          quality: :high
+        )
+
+      assert {:n, "2"} in form
+      assert {:size, "1024x1024"} in form
+      assert {:quality, "high"} in form
+    end
+
+    test "raises on ContentPart with type :image_url (URL only)" do
+      parts = [%ContentPart{type: :image_url, url: "https://x/y.png"}]
+
+      assert_raise ReqLLM.Error.Invalid.Parameter, fn ->
+        Images.format_edit_request("gpt-image-1.5", "edit", parts, [])
+      end
+    end
+
+    test "raises when image_parts is empty" do
+      assert_raise ReqLLM.Error.Invalid.Parameter, fn ->
+        Images.format_edit_request("gpt-image-1.5", "edit", [], [])
+      end
+    end
+  end
+
   describe "Azure.decode_response output_format threading" do
     test "output_format flows from request.options into parse_response" do
       model = gpt_image_model()
