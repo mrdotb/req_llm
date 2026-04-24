@@ -2011,6 +2011,73 @@ defmodule ReqLLM.Providers.AzureTest do
 
       assert Req.Request.get_private(request, :formatter) == ReqLLM.Providers.Azure.Images
     end
+
+    test "builds /images/generations request with JSON body" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "A red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "test-key",
+          size: "1024x1024",
+          quality: :medium,
+          output_format: :png,
+          provider_options: [output_compression: 100]
+        )
+
+      url_string = URI.to_string(request.url)
+      assert url_string =~ "/deployments/gpt-image-1.5/images/generations"
+      assert url_string =~ "api-version="
+
+      assert request.method == :post
+
+      body = get_json_body(request)
+      assert body["prompt"] == "A red fox"
+      assert body["size"] == "1024x1024"
+      assert body["quality"] == "medium"
+      assert body["output_format"] == "png"
+      assert body["output_compression"] == 100
+
+      refute Map.has_key?(body, "model"),
+             "traditional Azure endpoint must not carry model in body"
+    end
+
+    test "api-key auth header is set" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "secret"
+        )
+
+      assert get_header(request.headers, "api-key") == "secret"
+    end
+
+    test "bearer token auth header is set when api_key starts with Bearer" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "Bearer token-abc"
+        )
+
+      assert get_header(request.headers, "authorization") == "Bearer token-abc"
+      assert get_header(request.headers, "api-key") == nil
+    end
   end
 
   defp traditional_openai_model do

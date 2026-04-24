@@ -46,7 +46,7 @@ defmodule ReqLLM.Images do
                    doc: "Random seed for deterministic image generation (provider dependent)"
                  ],
                  quality: [
-                   type: {:or, [{:in, [:standard, :hd]}, :string]},
+                   type: {:or, [{:in, [:standard, :hd, :low, :medium, :high]}, :string]},
                    doc: "Requested quality (provider dependent)"
                  ],
                  style: [

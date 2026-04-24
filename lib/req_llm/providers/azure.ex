@@ -384,13 +384,34 @@ defmodule ReqLLM.Providers.Azure do
       model_family = get_model_family(model_id)
       resolved_base_url = resolve_base_url(model_family, opts)
 
+      # Strip unknown provider_options keys before validation so that image-specific
+      # keys (e.g. output_compression) don't cause NimbleOptions to reject the call.
+      # We restore the full raw provider_options after Options.process (Gap A fix).
+      raw_provider_options = Keyword.get(opts, :provider_options, [])
+
+      azure_provider_keys =
+        __MODULE__.provider_schema().schema |> Keyword.keys()
+
+      safe_provider_options =
+        Keyword.take(raw_provider_options, azure_provider_keys)
+
       opts_with_context =
         opts
         |> Keyword.put(:context, context)
         |> Keyword.put(:base_url, resolved_base_url)
+        |> Keyword.put(:provider_options, safe_provider_options)
 
       {:ok, processed_opts} =
         ReqLLM.Provider.Options.process(__MODULE__, :image, model, opts_with_context)
+
+      # Gap A: re-merge image-specific opts and the full provider_options from raw
+      # opts so that keys not in the Azure provider schema (e.g. output_compression)
+      # survive into the formatter call.
+      processed_opts =
+        Keyword.merge(
+          processed_opts,
+          Keyword.take(opts, [:size, :quality, :output_format, :user, :n, :provider_options])
+        )
 
       {api_version, deployment, base_url} =
         extract_azure_credentials(model, processed_opts)
