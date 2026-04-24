@@ -45,6 +45,8 @@ defmodule ReqLLM.Providers.Azure.Images do
 
   defp maybe_put_size(body, size) when is_binary(size), do: Map.put(body, "size", size)
 
+  defp maybe_put_size(body, _), do: body
+
   defp maybe_put_string(body, _key, nil), do: body
 
   defp maybe_put_string(body, key, value) when is_atom(value),
@@ -52,9 +54,13 @@ defmodule ReqLLM.Providers.Azure.Images do
 
   defp maybe_put_string(body, key, value) when is_binary(value), do: Map.put(body, key, value)
 
+  defp maybe_put_string(body, _key, _value), do: body
+
   defp maybe_put_integer(body, _key, nil), do: body
 
   defp maybe_put_integer(body, key, value) when is_integer(value), do: Map.put(body, key, value)
+
+  defp maybe_put_integer(body, _key, _value), do: body
 
   @doc "Build the multipart parts list for /images/edits."
   def format_edit_request(_model_id, prompt, image_parts, _opts) do
