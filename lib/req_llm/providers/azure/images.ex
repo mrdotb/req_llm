@@ -10,11 +10,11 @@ defmodule ReqLLM.Providers.Azure.Images do
   based on the content of the normalized context.
   """
 
-  # Future aliases — uncomment as formatter bodies are filled in across Tasks 2–9:
   alias ReqLLM.Context
   alias ReqLLM.Message
   alias ReqLLM.Message.ContentPart
   alias ReqLLM.Response
+  alias ReqLLM.Usage.Image, as: ImageUsage
 
   @doc "Build the JSON body for /images/generations."
   def format_generate_request(_model_id, prompt, opts) when is_binary(prompt) do
@@ -79,6 +79,13 @@ defmodule ReqLLM.Providers.Azure.Images do
 
     context = Keyword.get(opts, :context) || %Context{messages: []}
 
+    image_usage = ImageUsage.build_generated(length(parts), image_size_class(opts))
+
+    usage =
+      if map_size(image_usage) > 0 do
+        %{image_usage: image_usage}
+      end
+
     response = %Response{
       id: image_response_id(),
       model: model.id,
@@ -87,7 +94,7 @@ defmodule ReqLLM.Providers.Azure.Images do
       object: nil,
       stream?: false,
       stream: nil,
-      usage: nil,
+      usage: usage,
       finish_reason: :stop,
       provider_meta: %{"azure" => Map.delete(body, "data")},
       error: nil
@@ -127,6 +134,41 @@ defmodule ReqLLM.Providers.Azure.Images do
     "img_" <> (:crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false))
   end
 
-  @doc "Validate a list of image ContentParts for use in a multipart edit. Overridden in Task 6."
+  defp image_size_class(opts) do
+    size = Keyword.get(opts, :size) |> normalize_image_size()
+    quality = Keyword.get(opts, :quality) |> normalize_image_quality()
+    "#{size}:#{quality}"
+  end
+
+  defp normalize_image_size(nil), do: "1024x1024"
+  defp normalize_image_size("auto"), do: "1024x1024"
+
+  defp normalize_image_size({w, h}) when is_integer(w) and is_integer(h),
+    do: "#{w}x#{h}"
+
+  defp normalize_image_size(size) when is_binary(size),
+    do: size |> String.trim() |> String.downcase()
+
+  defp normalize_image_size(_), do: "1024x1024"
+
+  defp normalize_image_quality(nil), do: "medium"
+
+  defp normalize_image_quality(q) when is_atom(q),
+    do: q |> Atom.to_string() |> normalize_image_quality()
+
+  defp normalize_image_quality(q) when is_binary(q) do
+    case String.downcase(q) do
+      "low" -> "low"
+      "medium" -> "medium"
+      "standard" -> "medium"
+      "high" -> "high"
+      "hd" -> "high"
+      _ -> "medium"
+    end
+  end
+
+  defp normalize_image_quality(_), do: "medium"
+
+  @doc "Validate a list of image ContentParts. Raises on invalid entries."
   def validate_image_parts!(parts), do: parts
 end

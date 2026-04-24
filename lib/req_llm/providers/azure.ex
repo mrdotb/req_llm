@@ -657,6 +657,11 @@ defmodule ReqLLM.Providers.Azure do
             do: Keyword.put(&1, :context, request.options[:context]),
             else: &1
         )
+        |> then(
+          &if request.options[:output_format],
+            do: Keyword.put(&1, :output_format, request.options[:output_format]),
+            else: &1
+        )
 
       result = formatter.parse_response(response.body, model, opts)
 

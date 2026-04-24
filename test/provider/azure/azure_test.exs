@@ -1940,6 +1940,59 @@ defmodule ReqLLM.Providers.AzureTest do
       assert [%ContentPart{type: :image_url, url: "https://example.com/out.png"}] =
                resp.message.content
     end
+
+    test "sets image_usage in response.usage" do
+      body = %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, size: "1024x1024", quality: :medium)
+
+      assert %{image_usage: image_usage} = resp.usage
+      assert is_map(image_usage)
+      assert map_size(image_usage) > 0
+    end
+
+    test "preserves revised_prompt metadata when present" do
+      body = %{
+        "data" => [
+          %{"b64_json" => Base.encode64("X"), "revised_prompt" => "enhanced prompt text"}
+        ]
+      }
+
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      [part] = resp.message.content
+      assert part.metadata == %{revised_prompt: "enhanced prompt text"}
+    end
+  end
+
+  describe "Azure.decode_response output_format threading" do
+    test "output_format flows from request.options into parse_response" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          output_format: :webp
+        )
+
+      resp = %Req.Response{
+        status: 200,
+        body: %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      }
+
+      {_req, decoded} = Azure.decode_response({request, resp})
+
+      [part] = decoded.body.message.content
+      assert part.media_type == "image/webp"
+    end
   end
 
   describe "prepare_request/4 :image (family routing)" do
