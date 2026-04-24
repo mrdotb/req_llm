@@ -1846,11 +1846,38 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "prepare_request/4 :image (family routing)" do
+    test "gpt-image model routes to Azure.Images formatter" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "A red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "test-key"
+        )
+
+      assert Req.Request.get_private(request, :formatter) == ReqLLM.Providers.Azure.Images
+    end
+  end
+
   defp traditional_openai_model do
     %LLMDB.Model{
       id: "gpt-4o",
       provider: :azure,
       capabilities: %{chat: true},
+      extra: %{}
+    }
+  end
+
+  defp gpt_image_model do
+    %LLMDB.Model{
+      id: "gpt-image-1.5",
+      provider: :azure,
+      capabilities: %{chat: false},
       extra: %{}
     }
   end

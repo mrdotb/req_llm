@@ -269,6 +269,7 @@ defmodule ReqLLM.Providers.Azure do
   # Default formatters by model family prefix (used when model.extra.wire.protocol is not "openai_responses")
   @model_families %{
     "gpt" => __MODULE__.OpenAI,
+    "gpt-image" => __MODULE__.Images,
     "text-embedding" => __MODULE__.OpenAI,
     "codex" => __MODULE__.OpenAI,
     "o1" => __MODULE__.OpenAI,
@@ -289,6 +290,7 @@ defmodule ReqLLM.Providers.Azure do
   @family_env_vars %{
     "claude" => "AZURE_ANTHROPIC_BASE_URL",
     "gpt" => "AZURE_OPENAI_BASE_URL",
+    "gpt-image" => "AZURE_OPENAI_BASE_URL",
     "text-embedding" => "AZURE_OPENAI_BASE_URL",
     "codex" => "AZURE_OPENAI_BASE_URL",
     "o1" => "AZURE_OPENAI_BASE_URL",
@@ -301,6 +303,7 @@ defmodule ReqLLM.Providers.Azure do
   @family_api_key_env_vars %{
     "claude" => "AZURE_ANTHROPIC_API_KEY",
     "gpt" => "AZURE_OPENAI_API_KEY",
+    "gpt-image" => "AZURE_OPENAI_API_KEY",
     "text-embedding" => "AZURE_OPENAI_API_KEY",
     "codex" => "AZURE_OPENAI_API_KEY",
     "o1" => "AZURE_OPENAI_API_KEY",
@@ -371,6 +374,70 @@ defmodule ReqLLM.Providers.Azure do
 
   def prepare_request(:embedding, model_spec, text, opts) do
     do_prepare_embedding_request(model_spec, text, opts)
+  end
+
+  def prepare_request(:image, model_spec, prompt_or_messages, opts) do
+    with {:ok, model} <- ReqLLM.model(model_spec),
+         model_id = effective_model_id(model),
+         :ok <- validate_image_model(model_id),
+         {:ok, context, prompt, _image_parts} <- image_context(prompt_or_messages, opts) do
+      model_family = get_model_family(model_id)
+      resolved_base_url = resolve_base_url(model_family, opts)
+
+      opts_with_context =
+        opts
+        |> Keyword.put(:context, context)
+        |> Keyword.put(:base_url, resolved_base_url)
+
+      {:ok, processed_opts} =
+        ReqLLM.Provider.Options.process(__MODULE__, :image, model, opts_with_context)
+
+      {api_version, deployment, base_url} =
+        extract_azure_credentials(model, processed_opts)
+
+      formatter = __MODULE__.Images
+
+      body = formatter.format_generate_request(model_id, prompt, processed_opts)
+      path = "/deployments/#{deployment}/images/generations?api-version=#{api_version}"
+
+      http_opts = Keyword.get(opts, :req_http_options, [])
+
+      req_keys =
+        supported_provider_options() ++
+          @common_req_keys ++
+          [
+            :n,
+            :size,
+            :aspect_ratio,
+            :output_format,
+            :response_format,
+            :quality,
+            :style,
+            :seed,
+            :negative_prompt,
+            :user
+          ]
+
+      request =
+        Req.new(
+          [
+            url: path,
+            method: :post,
+            json: body,
+            receive_timeout: Keyword.get(processed_opts, :receive_timeout, 120_000)
+          ] ++ http_opts
+        )
+        |> Req.Request.register_options(req_keys)
+        |> Req.Request.merge_options(
+          Keyword.take(processed_opts, req_keys) ++
+            [operation: :image, model: model.id, base_url: base_url]
+        )
+        |> Req.Request.put_private(:model, model)
+        |> Req.Request.put_private(:formatter, formatter)
+        |> attach(model, processed_opts)
+
+      {:ok, request}
+    end
   end
 
   def prepare_request(operation, model_spec, input, opts) do
@@ -1335,5 +1402,57 @@ defmodule ReqLLM.Providers.Azure do
   # slashes after the base URL has been trimmed.
   defp join_url(base_url, path) when is_binary(base_url) and is_binary(path) do
     String.trim_trailing(base_url, "/") <> path
+  end
+
+  defp validate_image_model(model_id) do
+    case get_model_family(model_id) do
+      "gpt-image" ->
+        :ok
+
+      family ->
+        {:error,
+         ReqLLM.Error.Invalid.Parameter.exception(
+           parameter:
+             "Model '#{model_id}' (family '#{family}') does not support image operations on Azure. Use a gpt-image-* deployment."
+         )}
+    end
+  end
+
+  defp image_context(prompt_or_messages, opts) do
+    context_result =
+      case Keyword.get(opts, :context) do
+        %ReqLLM.Context{} = ctx -> {:ok, ctx}
+        _ -> ReqLLM.Context.normalize(prompt_or_messages, opts)
+      end
+
+    with {:ok, context} <- context_result do
+      {prompt, image_parts} = extract_prompt_and_images(context)
+      {:ok, context, prompt, image_parts}
+    end
+  end
+
+  defp extract_prompt_and_images(%ReqLLM.Context{messages: messages}) do
+    last_user =
+      messages
+      |> Enum.reverse()
+      |> Enum.find(&(&1.role == :user))
+
+    case last_user do
+      %ReqLLM.Message{content: content} when is_list(content) ->
+        prompt =
+          content
+          |> Enum.filter(&(&1.type == :text))
+          |> Enum.map_join("", & &1.text)
+          |> String.trim()
+
+        images = Enum.filter(content, &(&1.type == :image))
+        {prompt, images}
+
+      %ReqLLM.Message{content: content} when is_binary(content) ->
+        {String.trim(content), []}
+
+      _ ->
+        {"", []}
+    end
   end
 end
