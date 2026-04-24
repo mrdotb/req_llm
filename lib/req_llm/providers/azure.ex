@@ -660,7 +660,7 @@ defmodule ReqLLM.Providers.Azure do
       |> Enum.uniq()
 
     request
-    |> Req.Request.put_header("content-type", "application/json")
+    |> maybe_put_json_content_type()
     |> Req.Request.put_header(auth_header_name, auth_header_value)
     |> then(fn req ->
       Enum.reduce(extra_headers, req, fn {key, value}, acc ->
@@ -1508,6 +1508,14 @@ defmodule ReqLLM.Providers.Azure do
 
       _ ->
         {"", []}
+    end
+  end
+
+  defp maybe_put_json_content_type(request) do
+    if Req.Request.get_private(request, :skip_content_type) do
+      request
+    else
+      Req.Request.put_header(request, "content-type", "application/json")
     end
   end
 end

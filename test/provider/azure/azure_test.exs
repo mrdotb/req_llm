@@ -2260,6 +2260,48 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.attach content-type handling" do
+    test "JSON requests keep content-type application/json" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert get_header(request.headers, "content-type") =~ "application/json"
+    end
+
+    test "multipart image-edit requests do not carry a JSON content-type" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("edit"),
+            ReqLLM.Message.ContentPart.image("IMG", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert get_header(request.headers, "content-type") == nil
+    end
+  end
+
   defp traditional_openai_model do
     %LLMDB.Model{
       id: "gpt-4o",
