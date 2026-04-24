@@ -1995,6 +1995,37 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.decode_response size+quality threading" do
+    test "threads size and quality from request.options into parse_response for accurate usage" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          size: "1536x1024",
+          quality: :high
+        )
+
+      resp = %Req.Response{
+        status: 200,
+        body: %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      }
+
+      {_req, decoded} = Azure.decode_response({request, resp})
+
+      assert %{image_usage: image_usage} = decoded.body.usage
+      # image_size_class/1 in Azure.Images produces "1536x1024:high" when both are threaded;
+      # ImageUsage.build_generated/2 returns %{generated: %{count: n, size_class: class}}
+      assert %{generated: %{size_class: size_class}} = image_usage
+      assert size_class == "1536x1024:high"
+    end
+  end
+
   describe "prepare_request/4 :image (family routing)" do
     test "gpt-image model routes to Azure.Images formatter" do
       model = gpt_image_model()

@@ -406,12 +406,19 @@ defmodule ReqLLM.Providers.Azure do
 
       # Gap A: re-merge image-specific opts and the full provider_options from raw
       # opts so that keys not in the Azure provider schema (e.g. output_compression)
-      # survive into the formatter call.
+      # survive into the formatter call.  processed_opts wins on conflict for all
+      # scalar keys so that any translation Options.process applied is not clobbered.
+      # For :provider_options we merge at the nested level: raw keys fill in gaps,
+      # but processed values win on conflict.
+      restored_provider_options =
+        Keyword.merge(raw_provider_options, Keyword.get(processed_opts, :provider_options, []))
+
       processed_opts =
         Keyword.merge(
-          processed_opts,
-          Keyword.take(opts, [:size, :quality, :output_format, :user, :n, :provider_options])
+          Keyword.take(opts, [:size, :quality, :output_format, :user, :n]),
+          processed_opts
         )
+        |> Keyword.put(:provider_options, restored_provider_options)
 
       {api_version, deployment, base_url} =
         extract_azure_credentials(model, processed_opts)
@@ -683,6 +690,8 @@ defmodule ReqLLM.Providers.Azure do
             do: Keyword.put(&1, :output_format, request.options[:output_format]),
             else: &1
         )
+        |> then(&if request.options[:size], do: Keyword.put(&1, :size, request.options[:size]), else: &1)
+        |> then(&if request.options[:quality], do: Keyword.put(&1, :quality, request.options[:quality]), else: &1)
 
       result = formatter.parse_response(response.body, model, opts)
 

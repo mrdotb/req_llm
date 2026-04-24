@@ -169,6 +169,6 @@ defmodule ReqLLM.Providers.Azure.Images do
 
   defp normalize_image_quality(_), do: "medium"
 
-  @doc "Validate a list of image ContentParts. Raises on invalid entries."
+  @doc false
   def validate_image_parts!(parts), do: parts
 end
