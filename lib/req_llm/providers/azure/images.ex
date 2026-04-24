@@ -186,15 +186,14 @@ defmodule ReqLLM.Providers.Azure.Images do
 
   defp normalize_image_quality(_), do: "medium"
 
-  @doc false
-  def validate_image_parts!([]) do
+  defp validate_image_parts!([]) do
     raise ReqLLM.Error.Invalid.Parameter.exception(
             parameter:
               "image edit requires at least one %ContentPart{type: :image} in the last user message"
           )
   end
 
-  def validate_image_parts!(parts) when is_list(parts) do
+  defp validate_image_parts!(parts) when is_list(parts) do
     Enum.each(parts, fn
       %ContentPart{type: :image, data: data} when is_binary(data) ->
         :ok

@@ -2214,6 +2214,24 @@ defmodule ReqLLM.Providers.AzureTest do
       assert get_header(request.headers, "authorization") == "Bearer token-abc"
       assert get_header(request.headers, "api-key") == nil
     end
+
+    test "accepts provider_options as a map" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          provider_options: %{output_compression: 100}
+        )
+
+      body = get_json_body(request)
+      assert body["output_compression"] == 100
+    end
   end
 
   describe "Azure image op classification" do

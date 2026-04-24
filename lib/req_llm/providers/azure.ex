@@ -389,7 +389,11 @@ defmodule ReqLLM.Providers.Azure do
       # Strip unknown provider_options keys before validation so that image-specific
       # keys (e.g. output_compression) don't cause NimbleOptions to reject the call.
       # We restore the full raw provider_options after Options.process (Gap A fix).
-      raw_provider_options = Keyword.get(opts, :provider_options, [])
+      raw_provider_options =
+        case Keyword.get(opts, :provider_options, []) do
+          list when is_list(list) -> list
+          map when is_map(map) -> Enum.into(map, [])
+        end
 
       azure_provider_keys =
         __MODULE__.provider_schema().schema |> Keyword.keys()
@@ -443,7 +447,17 @@ defmodule ReqLLM.Providers.Azure do
     ReqLLM.Provider.Defaults.prepare_request(__MODULE__, operation, model_spec, input, opts)
   end
 
-  defp build_image_request(:generate, model, prompt, _image_parts, processed_opts, deployment, api_version, base_url, opts) do
+  defp build_image_request(
+         :generate,
+         model,
+         prompt,
+         _image_parts,
+         processed_opts,
+         deployment,
+         api_version,
+         base_url,
+         opts
+       ) do
     formatter = __MODULE__.Images
     model_id = effective_model_id(model)
     body = formatter.format_generate_request(model_id, prompt, processed_opts)
@@ -477,7 +491,17 @@ defmodule ReqLLM.Providers.Azure do
     {:ok, request}
   end
 
-  defp build_image_request(:edit, model, prompt, image_parts, processed_opts, deployment, api_version, base_url, opts) do
+  defp build_image_request(
+         :edit,
+         model,
+         prompt,
+         image_parts,
+         processed_opts,
+         deployment,
+         api_version,
+         base_url,
+         opts
+       ) do
     formatter = __MODULE__.Images
 
     form_parts =
@@ -486,7 +510,9 @@ defmodule ReqLLM.Providers.Azure do
     path = "/deployments/#{deployment}/images/edits?api-version=#{api_version}"
 
     http_opts = Keyword.get(opts, :req_http_options, [])
-    req_keys = supported_provider_options() ++ @common_req_keys ++ [:size, :quality, :output_format, :n]
+
+    req_keys =
+      supported_provider_options() ++ @common_req_keys ++ [:size, :quality, :output_format, :n]
 
     request =
       Req.new(
@@ -739,8 +765,14 @@ defmodule ReqLLM.Providers.Azure do
             do: Keyword.put(&1, :output_format, request.options[:output_format]),
             else: &1
         )
-        |> then(&if request.options[:size], do: Keyword.put(&1, :size, request.options[:size]), else: &1)
-        |> then(&if request.options[:quality], do: Keyword.put(&1, :quality, request.options[:quality]), else: &1)
+        |> then(
+          &if request.options[:size], do: Keyword.put(&1, :size, request.options[:size]), else: &1
+        )
+        |> then(
+          &if request.options[:quality],
+            do: Keyword.put(&1, :quality, request.options[:quality]),
+            else: &1
+        )
 
       result = formatter.parse_response(response.body, model, opts)
 
