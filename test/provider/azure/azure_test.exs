@@ -2258,6 +2258,45 @@ defmodule ReqLLM.Providers.AzureTest do
 
       assert URI.to_string(request.url) =~ "/images/edits"
     end
+
+    test "edit request uses form_multipart with image + prompt + mask parts" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("Make this black and white"),
+            ReqLLM.Message.ContentPart.image("IMG-BYTES", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          provider_options: [mask: "MASK-BYTES"]
+        )
+
+      form = request.options[:form_multipart]
+      refute is_nil(form), "expected form_multipart option to be set"
+
+      assert Enum.find(form, &match?({:image, _}, &1))
+      assert Enum.find(form, &match?({:mask, _}, &1))
+      assert {:prompt, "Make this black and white"} in form
+
+      # URL
+      assert URI.to_string(request.url) =~ "/deployments/gpt-image-1.5/images/edits"
+
+      # Auth header still set
+      assert get_header(request.headers, "api-key") == "k"
+
+      # Content-type not pre-set — Req will supply multipart boundary
+      assert get_header(request.headers, "content-type") == nil
+    end
   end
 
   describe "Azure.attach content-type handling" do

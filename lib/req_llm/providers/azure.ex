@@ -477,17 +477,35 @@ defmodule ReqLLM.Providers.Azure do
     {:ok, request}
   end
 
-  defp build_image_request(:edit, model, _prompt, _image_parts, _processed_opts, deployment, api_version, base_url, _opts) do
-    # Placeholder — Task 6 and Task 8 will flesh this out with multipart body.
-    # For now just route to /edits so the Task 5 classification test passes.
+  defp build_image_request(:edit, model, prompt, image_parts, processed_opts, deployment, api_version, base_url, opts) do
+    formatter = __MODULE__.Images
+
+    form_parts =
+      formatter.format_edit_request(model.id, prompt, image_parts, processed_opts)
+
     path = "/deployments/#{deployment}/images/edits?api-version=#{api_version}"
 
+    http_opts = Keyword.get(opts, :req_http_options, [])
+    req_keys = supported_provider_options() ++ @common_req_keys ++ [:size, :quality, :output_format, :n]
+
     request =
-      Req.new(url: path, method: :post, base_url: base_url)
-      |> Req.Request.register_options([:model, :base_url, :operation])
-      |> Req.Request.merge_options(model: model.id, base_url: base_url, operation: :image)
+      Req.new(
+        [
+          url: path,
+          method: :post,
+          form_multipart: form_parts,
+          receive_timeout: Keyword.get(processed_opts, :receive_timeout, 120_000)
+        ] ++ http_opts
+      )
+      |> Req.Request.register_options(req_keys ++ [:form_multipart])
+      |> Req.Request.merge_options(
+        Keyword.take(processed_opts, req_keys) ++
+          [operation: :image, model: model.id, base_url: base_url]
+      )
       |> Req.Request.put_private(:model, model)
-      |> Req.Request.put_private(:formatter, __MODULE__.Images)
+      |> Req.Request.put_private(:formatter, formatter)
+      |> Req.Request.put_private(:skip_content_type, true)
+      |> attach(model, processed_opts)
 
     {:ok, request}
   end
