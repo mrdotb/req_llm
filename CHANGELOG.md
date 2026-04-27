@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features:
+
+* azure: add gpt-image generations and edits support (`/images/generations` and `/images/edits`)
+
 <!-- changelog -->
 
 ## [v1.10.0](https://github.com/agentjido/req_llm/compare/v1.9.0...v1.10.0) (2026-04-17)

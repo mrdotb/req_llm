@@ -177,6 +177,66 @@ schema = [
 )
 ```
 
+### Image Generation
+
+Azure deployments of `gpt-image-*` models support both text-to-image generation
+(`/images/generations`) and image-to-image editing (`/images/edits`). Both are
+reached through `ReqLLM.generate_image/3`; the request is routed to the edit
+endpoint when the context contains `%ReqLLM.Message.ContentPart{type: :image}`
+entries, and to the generate endpoint otherwise.
+
+**Requirements:** Azure OpenAI Service (traditional) base URL — the form
+`https://<resource>.openai.azure.com/openai`. Azure AI Foundry and the
+`/openai/v1` GA path are not supported for image operations.
+
+#### Text-to-image (generations)
+
+```elixir
+{:ok, response} =
+  ReqLLM.generate_image(
+    "azure:gpt-image-1.5",
+    "A photograph of a red fox in an autumn forest",
+    base_url: "https://<resource>.openai.azure.com/openai",
+    deployment: "gpt-image-1.5",
+    size: "1024x1024",
+    quality: :medium,
+    output_format: :png,
+    provider_options: [output_compression: 100]
+  )
+
+File.write!("fox.png", ReqLLM.Response.image_data(response))
+```
+
+#### Image-to-image (edits)
+
+```elixir
+input = File.read!("image_to_edit.png")
+mask  = File.read!("mask.png")
+
+context =
+  ReqLLM.Context.new([
+    ReqLLM.Context.user([
+      ReqLLM.Message.ContentPart.text("Make this black and white"),
+      ReqLLM.Message.ContentPart.image(input, "image/png")
+    ])
+  ])
+
+{:ok, response} =
+  ReqLLM.generate_image(
+    "azure:gpt-image-1.5",
+    context,
+    base_url: "https://<resource>.openai.azure.com/openai",
+    deployment: "gpt-image-1.5",
+    provider_options: [mask: mask]
+  )
+
+File.write!("edited.png", ReqLLM.Response.image_data(response))
+```
+
+The mask is optional. Multiple `ContentPart.image/2` parts in the same user
+message are sent as multiple `image` multipart fields (used by gpt-image models
+for composition).
+
 ## Supported Models
 
 ### OpenAI GPT-4 Family

@@ -1846,11 +1846,610 @@ defmodule ReqLLM.Providers.AzureTest do
     end
   end
 
+  describe "Azure.Images.format_generate_request/3" do
+    alias ReqLLM.Providers.Azure.Images
+
+    test "emits minimum required fields" do
+      body = Images.format_generate_request("gpt-image-1.5", "hello", [])
+      assert body == %{"prompt" => "hello", "n" => 1}
+    end
+
+    test "passes through size, quality, output_format and user" do
+      body =
+        Images.format_generate_request(
+          "gpt-image-1.5",
+          "hello",
+          size: "1024x1024",
+          quality: :medium,
+          output_format: :png,
+          user: "u1"
+        )
+
+      assert body["size"] == "1024x1024"
+      assert body["quality"] == "medium"
+      assert body["output_format"] == "png"
+      assert body["user"] == "u1"
+    end
+
+    test "passes provider_options for output_compression / background / moderation" do
+      body =
+        Images.format_generate_request(
+          "gpt-image-1.5",
+          "hello",
+          provider_options: [output_compression: 80, background: "transparent", moderation: "low"]
+        )
+
+      assert body["output_compression"] == 80
+      assert body["background"] == "transparent"
+      assert body["moderation"] == "low"
+    end
+
+    test "accepts a size tuple" do
+      body = Images.format_generate_request("gpt-image-1.5", "hi", size: {1536, 1024})
+      assert body["size"] == "1536x1024"
+    end
+
+    test "omits keys whose values are nil" do
+      body = Images.format_generate_request("gpt-image-1.5", "hi", size: nil, quality: nil)
+      refute Map.has_key?(body, "size")
+      refute Map.has_key?(body, "quality")
+    end
+  end
+
+  describe "Azure.Images.parse_response/3" do
+    alias ReqLLM.Message.ContentPart
+    alias ReqLLM.Providers.Azure.Images
+
+    test "decodes b64_json entries into :image ContentParts" do
+      body = %{
+        "created" => 1_700_000_000,
+        "data" => [
+          %{"b64_json" => Base.encode64("PNG-BYTES-1")},
+          %{"b64_json" => Base.encode64("PNG-BYTES-2")}
+        ]
+      }
+
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      assert [
+               %ContentPart{type: :image, data: "PNG-BYTES-1", media_type: "image/png"},
+               %ContentPart{type: :image, data: "PNG-BYTES-2", media_type: "image/png"}
+             ] = resp.message.content
+
+      assert resp.model == "gpt-image-1.5"
+      assert resp.finish_reason == :stop
+    end
+
+    test "honors output_format opt for media_type" do
+      body = %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, output_format: :webp)
+
+      assert [%ContentPart{media_type: "image/webp"}] = resp.message.content
+    end
+
+    test "handles url entries (no b64_json)" do
+      body = %{"data" => [%{"url" => "https://example.com/out.png"}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      assert [%ContentPart{type: :image_url, url: "https://example.com/out.png"}] =
+               resp.message.content
+    end
+
+    test "sets image_usage in response.usage" do
+      body = %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, size: "1024x1024", quality: :medium)
+
+      assert %{image_usage: image_usage} = resp.usage
+      assert is_map(image_usage)
+      assert map_size(image_usage) > 0
+    end
+
+    test "preserves revised_prompt metadata when present" do
+      body = %{
+        "data" => [
+          %{"b64_json" => Base.encode64("X"), "revised_prompt" => "enhanced prompt text"}
+        ]
+      }
+
+      model = %LLMDB.Model{id: "gpt-image-1.5", provider: :azure}
+
+      {:ok, resp} = Images.parse_response(body, model, [])
+
+      [part] = resp.message.content
+      assert part.metadata == %{revised_prompt: "enhanced prompt text"}
+    end
+  end
+
+  describe "Azure.Images.format_edit_request/4" do
+    alias ReqLLM.Message.ContentPart
+    alias ReqLLM.Providers.Azure.Images
+
+    test "emits image + prompt parts with correct content types" do
+      parts = [ContentPart.image("IMG-BYTES", "image/png")]
+
+      form = Images.format_edit_request("gpt-image-1.5", "make it b/w", parts, [])
+
+      image_entry = Enum.find(form, fn {k, _} -> k == :image end)
+      {:image, {bytes, meta}} = image_entry
+      assert bytes == "IMG-BYTES"
+      assert Keyword.fetch!(meta, :content_type) == "image/png"
+      assert Keyword.fetch!(meta, :filename) == "image.png"
+
+      assert {:prompt, "make it b/w"} in form
+    end
+
+    test "emits multiple image parts in order" do
+      parts = [
+        ContentPart.image("A", "image/png"),
+        ContentPart.image("B", "image/jpeg")
+      ]
+
+      form = Images.format_edit_request("gpt-image-1.5", "compose", parts, [])
+      images = for {:image, entry} <- form, do: entry
+
+      assert length(images) == 2
+      {bytes1, meta1} = Enum.at(images, 0)
+      {bytes2, meta2} = Enum.at(images, 1)
+      assert bytes1 == "A"
+      assert bytes2 == "B"
+      assert Keyword.fetch!(meta1, :content_type) == "image/png"
+      assert Keyword.fetch!(meta2, :content_type) == "image/jpeg"
+      assert Keyword.fetch!(meta2, :filename) == "image.jpg"
+    end
+
+    test "inserts mask when provided as binary (defaults to png)" do
+      parts = [ContentPart.image("IMG", "image/png")]
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          provider_options: [mask: "MASK-BYTES"]
+        )
+
+      {:mask, {bytes, meta}} = Enum.find(form, &match?({:mask, _}, &1))
+      assert bytes == "MASK-BYTES"
+      assert Keyword.fetch!(meta, :content_type) == "image/png"
+      assert Keyword.fetch!(meta, :filename) == "mask.png"
+    end
+
+    test "inserts mask when provided as %ContentPart{type: :image}" do
+      parts = [ContentPart.image("IMG", "image/png")]
+      mask_cp = ContentPart.image("MASK", "image/webp")
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          provider_options: [mask: mask_cp]
+        )
+
+      {:mask, {bytes, meta}} = Enum.find(form, &match?({:mask, _}, &1))
+      assert bytes == "MASK"
+      assert Keyword.fetch!(meta, :content_type) == "image/webp"
+      assert Keyword.fetch!(meta, :filename) == "mask.webp"
+    end
+
+    test "passes scalar opts as string multipart entries" do
+      parts = [ContentPart.image("IMG", "image/png")]
+
+      form =
+        Images.format_edit_request(
+          "gpt-image-1.5",
+          "edit",
+          parts,
+          n: 2,
+          size: "1024x1024",
+          quality: :high
+        )
+
+      assert {:n, "2"} in form
+      assert {:size, "1024x1024"} in form
+      assert {:quality, "high"} in form
+    end
+
+    test "raises on ContentPart with type :image_url (URL only)" do
+      parts = [%ContentPart{type: :image_url, url: "https://x/y.png"}]
+
+      assert_raise ReqLLM.Error.Invalid.Parameter, fn ->
+        Images.format_edit_request("gpt-image-1.5", "edit", parts, [])
+      end
+    end
+
+    test "raises when image_parts is empty" do
+      assert_raise ReqLLM.Error.Invalid.Parameter, fn ->
+        Images.format_edit_request("gpt-image-1.5", "edit", [], [])
+      end
+    end
+  end
+
+  describe "Azure.decode_response output_format threading" do
+    test "output_format flows from request.options into parse_response" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          output_format: :webp
+        )
+
+      resp = %Req.Response{
+        status: 200,
+        body: %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      }
+
+      {_req, decoded} = Azure.decode_response({request, resp})
+
+      [part] = decoded.body.message.content
+      assert part.media_type == "image/webp"
+    end
+  end
+
+  describe "Azure.decode_response size+quality threading" do
+    test "threads size and quality from request.options into parse_response for accurate usage" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          size: "1536x1024",
+          quality: :high
+        )
+
+      resp = %Req.Response{
+        status: 200,
+        body: %{"data" => [%{"b64_json" => Base.encode64("X")}]}
+      }
+
+      {_req, decoded} = Azure.decode_response({request, resp})
+
+      assert %{image_usage: image_usage} = decoded.body.usage
+      # image_size_class/1 in Azure.Images produces "1536x1024:high" when both are threaded;
+      # ImageUsage.build_generated/2 returns %{generated: %{count: n, size_class: class}}
+      assert %{generated: %{size_class: size_class}} = image_usage
+      assert size_class == "1536x1024:high"
+    end
+  end
+
+  describe "prepare_request/4 :image (family routing)" do
+    test "gpt-image model routes to Azure.Images formatter" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "A red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "test-key"
+        )
+
+      assert Req.Request.get_private(request, :formatter) == ReqLLM.Providers.Azure.Images
+    end
+
+    test "builds /images/generations request with JSON body" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "A red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "test-key",
+          size: "1024x1024",
+          quality: :medium,
+          output_format: :png,
+          provider_options: [output_compression: 100]
+        )
+
+      url_string = URI.to_string(request.url)
+      assert url_string =~ "/deployments/gpt-image-1.5/images/generations"
+      assert url_string =~ "api-version="
+
+      assert request.method == :post
+
+      body = get_json_body(request)
+      assert body["prompt"] == "A red fox"
+      assert body["size"] == "1024x1024"
+      assert body["quality"] == "medium"
+      assert body["output_format"] == "png"
+      assert body["output_compression"] == 100
+
+      refute Map.has_key?(body, "model"),
+             "traditional Azure endpoint must not carry model in body"
+    end
+
+    test "api-key auth header is set" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "secret"
+        )
+
+      assert get_header(request.headers, "api-key") == "secret"
+    end
+
+    test "bearer token auth header is set when api_key starts with Bearer" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "Bearer token-abc"
+        )
+
+      assert get_header(request.headers, "authorization") == "Bearer token-abc"
+      assert get_header(request.headers, "api-key") == nil
+    end
+
+    test "accepts provider_options as a map" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          provider_options: %{output_compression: 100}
+        )
+
+      body = get_json_body(request)
+      assert body["output_compression"] == 100
+    end
+  end
+
+  describe "Azure image op classification" do
+    alias ReqLLM.Message.ContentPart
+
+    test "text-only context routes to generate path" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "a red fox",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/generations"
+    end
+
+    test "context with an image ContentPart routes to edit path" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ContentPart.text("Make it black and white"),
+            ContentPart.image("IMG-BYTES", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/edits"
+    end
+
+    test "edit request uses form_multipart with image + prompt + mask parts" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("Make this black and white"),
+            ReqLLM.Message.ContentPart.image("IMG-BYTES", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k",
+          provider_options: [mask: "MASK-BYTES"]
+        )
+
+      form = request.options[:form_multipart]
+      refute is_nil(form), "expected form_multipart option to be set"
+
+      assert Enum.find(form, &match?({:image, _}, &1))
+      assert Enum.find(form, &match?({:mask, _}, &1))
+      assert {:prompt, "Make this black and white"} in form
+
+      # URL
+      assert URI.to_string(request.url) =~ "/deployments/gpt-image-1.5/images/edits"
+
+      # Auth header still set
+      assert get_header(request.headers, "api-key") == "k"
+
+      # Content-type not pre-set — Req will supply multipart boundary
+      assert get_header(request.headers, "content-type") == nil
+    end
+  end
+
+  describe "Azure.attach content-type handling" do
+    test "JSON requests keep content-type application/json" do
+      model = gpt_image_model()
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          "hi",
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert get_header(request.headers, "content-type") =~ "application/json"
+    end
+
+    test "multipart image-edit requests do not carry a JSON content-type" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("edit"),
+            ReqLLM.Message.ContentPart.image("IMG", "image/png")
+          ])
+        ])
+
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert get_header(request.headers, "content-type") == nil
+    end
+  end
+
+  describe "Azure image operation error paths" do
+    test "rejects :image for non-gpt-image model family" do
+      model = traditional_openai_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.openai.azure.com/openai",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "does not support image operations on Azure"
+    end
+
+    test "rejects Foundry base URL for :image" do
+      model = gpt_image_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.services.ai.azure.com",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "traditional Azure OpenAI Service"
+    end
+
+    test "rejects v1 GA base URL for :image" do
+      model = gpt_image_model()
+
+      assert {:error, %ReqLLM.Error.Invalid.Parameter{parameter: msg}} =
+               Azure.prepare_request(
+                 :image,
+                 model,
+                 "hi",
+                 base_url: "https://r.openai.azure.com/openai/v1",
+                 api_key: "k",
+                 deployment: "d"
+               )
+
+      assert msg =~ "traditional Azure OpenAI Service"
+    end
+
+    test "rejects image edit with only an :image_url ContentPart" do
+      model = gpt_image_model()
+
+      context =
+        ReqLLM.Context.new([
+          ReqLLM.Context.user([
+            ReqLLM.Message.ContentPart.text("edit"),
+            %ReqLLM.Message.ContentPart{type: :image_url, url: "https://x/y.png"}
+          ])
+        ])
+
+      # image_url does not count as :image — this context has zero :image parts
+      # and therefore routes to generate, which is fine. This test documents
+      # the routing behavior explicitly.
+      {:ok, request} =
+        Azure.prepare_request(
+          :image,
+          model,
+          context,
+          deployment: "gpt-image-1.5",
+          base_url: "https://r.openai.azure.com/openai",
+          api_key: "k"
+        )
+
+      assert URI.to_string(request.url) =~ "/images/generations"
+    end
+  end
+
   defp traditional_openai_model do
     %LLMDB.Model{
       id: "gpt-4o",
       provider: :azure,
       capabilities: %{chat: true},
+      extra: %{}
+    }
+  end
+
+  defp gpt_image_model do
+    %LLMDB.Model{
+      id: "gpt-image-1.5",
+      provider: :azure,
+      capabilities: %{chat: false},
       extra: %{}
     }
   end
